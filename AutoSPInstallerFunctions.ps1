@@ -371,7 +371,7 @@ Function CheckConfigFiles([xml]$xmlinput)
     {
         $pidKeyProjectServer = $xmlinput.Configuration.ProjectServer.PIDKeyProjectServer
         # Do a rudimentary check on the presence and format of the product key
-        if ($pidKeyProjectServer -notlike "?????-?????-?????-?????-?????")
+        if ($pidKey -notlike "?????-?????-?????-?????-?????" -and $xmlinput.Configuration.Install.SKU -ne "Foundation" )
         {
             throw " - The Project Server Product ID (PIDKey) is missing or badly formatted.`n - Check the value of <PIDKeyProjectServer> in `"$(Split-Path -Path $inputFile -Leaf)`" and try again."
         }
@@ -584,43 +584,86 @@ Function InstallPrerequisites([xml]$xmlinput)
     }
     Else
     {
-        Write-Host -ForegroundColor White " - Installing Prerequisite Software:"
-        If ((Gwmi Win32_OperatingSystem).Version -eq "6.1.7601") # Win2008 R2 SP1
-        {
-            # Due to the SharePoint 2010 issue described in http://support.microsoft.com/kb/2581903 (related to installing the KB976462 hotfix)
-            # (and simply to speed things up for SharePoint 2013) we install the .Net 3.5.1 features prior to attempting the PrerequisiteInstaller on Win2008 R2 SP1
-            Write-Host -ForegroundColor White "  - .Net Framework 3.5.1..." -NoNewline
-            # Get the current progress preference
-            $pref = $ProgressPreference
-            # Hide the progress bar since it tends to not disappear
-            $ProgressPreference = "SilentlyContinue"
-            Import-Module ServerManager
-            If (!(Get-WindowsFeature -Name NET-Framework).Installed)
-            {
-                Add-WindowsFeature -Name NET-Framework | Out-Null
-                Write-Host -ForegroundColor Green "Done."
-            }
-            else {Write-Host -ForegroundColor White "Already installed."}
-            # Restore progress preference
-            $ProgressPreference = $pref
+        Write-Host -ForegroundColor White " - Installing Prerequisite Software:" -NoNewline
+        Switch -Wildcard ((Gwmi Win32_OperatingSystem).Version)
+			{
+			  6.0* 
+			   { 
+				 #'This is a Windows Server 2008 OS'
+			   }
 
-        }
-        Try
-        {
-            # Detect if we're installing SP2010 on Windows Server 2012 (R2)
-            if ((Get-WmiObject Win32_OperatingSystem).Version -like "6.2*")
-            {
-                $osName = "Windows Server 2012"
+			  6.1.7601
+			   { 
+				#'This is a Windows Server 2008R2 R2 SP1'
+				#Due to the SharePoint 2010 issue described in http://support.microsoft.com/kb/2581903 (related to installing the KB976462 hotfix)#
+				# (and simply to speed things up for SharePoint 2013) we install the .Net 3.5.1 features prior to attempting the PrerequisiteInstaller on Win2008 R2 SP1
+				Write-Host -ForegroundColor White "  - .Net Framework 3.5.1..." -NoNewline
+				# Get the current progress preference
+				$pref = $ProgressPreference
+				# Hide the progress bar since it tends to not disappear
+				$ProgressPreference = "SilentlyContinue"
+				Import-Module ServerManager
+				If (!(Get-WindowsFeature -Name NET-Framework).Installed)
+				{
+					Add-WindowsFeature -Name NET-Framework | Out-Null
+					Write-Host -ForegroundColor Green "Done."
+				}
+				else {Write-Host -ForegroundColor White "Already installed."}
+				# Restore progress preference
+				$ProgressPreference = $pref
+				 
+			   }
+
+			  6.2*
+			   { 
+				 #'This is a Windows Server 2012 or Windows 8 OS'
+				$osName = "Windows Server 2012"
                 $win2012 = $true
                 $prereqInstallerRequiredBuild = "7009" # i.e. minimum required version of PrerequisiteInstaller.exe for Windows Server 2012 is 14.0.7009.1000
-            }
-            elseif ((Get-WmiObject Win32_OperatingSystem).Version -like "6.3*")
-            {
-                $osName = "Windows Server 2012 R2"
+			   }
+
+			  6.3*
+			   { 
+				 #'This is a Windows Server 2012R2 or Windows 8.1 OS'
+				$osName = "Windows Server 2012 R2"
                 $win2012 = $true
                 $prereqInstallerRequiredBuild = "7104" # i.e. minimum required version of PrerequisiteInstaller.exe for Windows Server 2012 R2 is 14.0.7104.5000
-            }
-            else {$win2012 = $false}
+			   }
+			  10.0.14393
+				{
+					 #'This is a Windows Server 2016'
+					$osName = "Windows Server 2016"
+					$prereqInstallerRequiredBuild = "7104" # i.e. minimum required version of PrerequisiteInstaller.exe for Windows Server 2012 R2 is 14.0.7104.5000		
+					if ($xmlinput.Configuration.Install.SKU -eq "Foundation") 
+						{
+						if ( [System.Version](Get-Command $env:SPbits\wsssetup.dll).FileVersionInfo.ProductVersion -lt  [System.Version]"15.0.4709.1000")
+							{
+								Write-Host -ForegroundColor White "."
+								Throw " - SharePoint Foundation 2013 is needs .Net 4.6 patch on $osName to install - see https://support.microsoft.com/en-ca/help/3087184"
+							}
+							else {Write-Host -BackgroundColor Green -ForegroundColor Black "OK."}
+					}
+					else
+					{
+						if ( [System.Version](Get-Command $env:SPbits\svrsetup.dll).FileVersionInfo.ProductVersion -lt  [System.Version]"15.0.4709.1000")
+							{
+								Write-Host -ForegroundColor White "."
+								Throw " - SharePoint 2013 is needs .Net 4.6 patch on $osName to install - see https://support.microsoft.com/en-ca/help/3087184"
+							}
+							else {Write-Host -BackgroundColor Green -ForegroundColor Black "OK."}
+					}
+					Write-Warning "- SharePoint 2013 is not officially supported on $osName - see https://technet.microsoft.com/library/a88d3f72-7ac3-4f08-b302-c4ca0a796268(v=office.16).aspx"
+				}
+			  Default 
+			   {
+				 #"Unable to determine OS for version $OS"
+				}
+			 }
+			   
+		
+
+        Try
+        {
             if ($win2012 -and ($env:spVer -eq "14"))
             {
                 Write-Host -ForegroundColor White " - Checking for required version of PrerequisiteInstaller.exe..." -NoNewline
@@ -690,19 +733,42 @@ Function InstallPrerequisites([xml]$xmlinput)
                     $startTime = Get-Date
                     if (CheckFor2013SP1) # Include WCFDataServices56 as required by updated SP1 prerequisiteinstaller.exe
                     {
-                        Start-Process "$env:SPbits\PrerequisiteInstaller.exe" -ArgumentList "/unattended `
-                                                                                             /SQLNCli:`"$env:SPbits\PrerequisiteInstallerFiles\sqlncli.msi`" `
-                                                                                             /PowerShell:`"$env:SPbits\PrerequisiteInstallerFiles\Windows6.1-KB2506143-x64.msu`" `
-                                                                                             /NETFX:`"$env:SPbits\PrerequisiteInstallerFiles\dotNetFx45_Full_x86_x64.exe`" `
-                                                                                             /IDFX:`"$env:SPbits\PrerequisiteInstallerFiles\Windows6.1-KB974405-x64.msu`" `
-                                                                                             /IDFX11:`"$env:SPbits\PrerequisiteInstallerFiles\MicrosoftIdentityExtensions-64.msi`" `
-                                                                                             /Sync:`"$env:SPbits\PrerequisiteInstallerFiles\Synchronization.msi`" `
-                                                                                             /AppFabric:`"$env:SPbits\PrerequisiteInstallerFiles\WindowsServerAppFabricSetup_x64.exe`" `
-                                                                                             /KB2671763:`"$env:SPbits\PrerequisiteInstallerFiles\AppFabric1.1-RTM-KB2671763-x64-ENU.exe`" `
-                                                                                             /MSIPCClient:`"$env:SPbits\PrerequisiteInstallerFiles\setup_msipc_x64.msi`" `
-                                                                                             /WCFDataServices:`"$env:SPbits\PrerequisiteInstallerFiles\WcfDataServices.exe`" `
-                                                                                             /WCFDataServices56:`"$env:SPbits\PrerequisiteInstallerFiles\WcfDataServices56.exe`""
-                        If (-not $?) {Throw}
+                        If ($osName = "Windows Server 2016") 
+							{
+							# https://support.microsoft.com/en-us/help/2765260/the-products-preparation-tool-in-sharepoint-server-2013-may-not-progre
+							# http://roger.dilsner.com/install-sharepoint-foundation-2013-windows-server-2016-solution/
+							# Work around for Web Application role being depreciated
+							Import-Module ServerManager
+
+							Add-WindowsFeature NET-WCF-HTTP-Activation45,NET-WCF-TCP-Activation45,NET-WCF-Pipe-Activation45
+
+							Add-WindowsFeature Net-Framework-Features,Web-Server,Web-WebServer,Web-Common-Http,Web-Static-Content,Web-Default-Doc,Web-Dir-Browsing,Web-Http-Errors,Web-App-Dev,Web-Asp-Net,Web-Net-Ext,Web-ISAPI-Ext,Web-ISAPI-Filter,Web-Health,Web-Http-Logging,Web-Log-Libraries,Web-Request-Monitor,Web-Http-Tracing,Web-Security,Web-Basic-Auth,Web-Windows-Auth,Web-Filtering,Web-Digest-Auth,Web-Performance,Web-Stat-Compression,Web-Dyn-Compression,Web-Mgmt-Tools,Web-Mgmt-Console,Web-Mgmt-Compat,Web-Metabase,WAS,WAS-Process-Model,WAS-NET-Environment,WAS-Config-APIs,Web-Lgcy-Scripting,Windows-Identity-Foundation,Server-Media-Foundation,Xps-Viewer
+							Start-Process "$env:SPbits\PrerequisiteInstallerFiles\sqlncli.msi" -ArgumentList "/qb"
+							Start-Process "$env:SPbits\PrerequisiteInstallerFiles\MicrosoftIdentityExtensions-64.msi" -ArgumentList "/qb"
+							Start-Process "$env:SPbits\PrerequisiteInstallerFiles\Synchronization.msi" -ArgumentList "/qb"
+							Start-Process "$env:SPbits\PrerequisiteInstallerFiles\setup_msipc_x64.msi" -ArgumentList "/qb"
+							Start-Process "$env:SPbits\PrerequisiteInstallerFiles\WindowsServerAppFabricSetup_x64.exe" -ArgumentList "/s /norestart"
+							Start-Process "$env:SPbits\PrerequisiteInstallerFiles\AppFabric1.1-RTM-KB2671763-x64-ENU.exe" -ArgumentList "/s /norestart"
+							Start-Process "$env:SPbits\PrerequisiteInstallerFiles\WcfDataServices.exe" -ArgumentList "/s /norestart"
+							Start-Process "$env:SPbits\PrerequisiteInstallerFiles\WcfDataServices56.exe" -ArgumentList "/s /norestart"
+							
+							}
+							else
+							{
+								Start-Process "$env:SPbits\PrerequisiteInstaller.exe" -ArgumentList "/unattended `
+																									 /SQLNCli:`"$env:SPbits\PrerequisiteInstallerFiles\sqlncli.msi`" `
+																									 /PowerShell:`"$env:SPbits\PrerequisiteInstallerFiles\Windows6.1-KB2506143-x64.msu`" `
+																									 /NETFX:`"$env:SPbits\PrerequisiteInstallerFiles\dotNetFx45_Full_x86_x64.exe`" `
+																									 /IDFX:`"$env:SPbits\PrerequisiteInstallerFiles\Windows6.1-KB974405-x64.msu`" `
+																									 /IDFX11:`"$env:SPbits\PrerequisiteInstallerFiles\MicrosoftIdentityExtensions-64.msi`" `
+																									 /Sync:`"$env:SPbits\PrerequisiteInstallerFiles\Synchronization.msi`" `
+																									 /AppFabric:`"$env:SPbits\PrerequisiteInstallerFiles\WindowsServerAppFabricSetup_x64.exe`" `
+																									 /KB2671763:`"$env:SPbits\PrerequisiteInstallerFiles\AppFabric1.1-RTM-KB2671763-x64-ENU.exe`" `
+																									 /MSIPCClient:`"$env:SPbits\PrerequisiteInstallerFiles\setup_msipc_x64.msi`" `
+																									 /WCFDataServices:`"$env:SPbits\PrerequisiteInstallerFiles\WcfDataServices.exe`" `
+																									 /WCFDataServices56:`"$env:SPbits\PrerequisiteInstallerFiles\WcfDataServices56.exe`""
+								If (-not $?) {Throw}
+							}
                     }
                     else # Just install the pre-SP1 set of prerequisites
                     {
@@ -865,67 +931,104 @@ Function InstallPrerequisites([xml]$xmlinput)
             ElseIf ($LASTEXITCODE -eq "-2145124329") {Write-Host -ForegroundColor White " - A known issue occurred installing one of the prerequisites"; InstallPreRequisites ([xml]$xmlinput)}
             Else {Throw " - An unknown error occurred installing prerequisites"}
         }
-        # Parsing most recent PreRequisiteInstaller log for errors or restart requirements, since $LASTEXITCODE doesn't seem to work...
-        $preReqLog = Get-ChildItem -Path (Get-Item $env:TEMP).FullName | ? {$_.Name -like "PrerequisiteInstaller.*"} | Sort-Object -Descending -Property "LastWriteTime" | Select-Object -first 1
-        If ($preReqLog -eq $null)
-        {
-            Write-Warning "Could not find PrerequisiteInstaller log file"
-        }
-        Else
-        {
-            # Get error(s) from log
-            $preReqLastError = $preReqLog | Select-String -SimpleMatch -Pattern "Error" -Encoding Unicode | ? {$_.Line  -notlike "*Startup task*"}
-            If ($preReqLastError)
-            {
-                ForEach ($preReqError in ($preReqLastError | ForEach {$_.Line})) {Write-Warning $preReqError}
-                $preReqLastReturncode = $preReqLog | Select-String -SimpleMatch -Pattern "Last return code" -Encoding Unicode | Select-Object -Last 1
-                If ($preReqLastReturnCode) {Write-Verbose $preReqLastReturncode.Line}
-                If (!($preReqLastReturncode -like "*(0)"))
-                {
-                    Write-Warning $preReqLastReturncode.Line
-                    If (($preReqLastReturncode -like "*-2145124329*") -or ($preReqLastReturncode -like "*2359302*") -or ($preReqLastReturncode -eq "5"))
-                    {
-                        Write-Host -ForegroundColor White " - A known issue occurred installing one of the prerequisites - retrying..."
-                        InstallPreRequisites ([xml]$xmlinput)
-                    }
-                    ElseIf (($preReqLog | Select-String -SimpleMatch -Pattern "Error when enabling ASP.NET v4.0.30319" -Encoding Unicode) -or ($preReqLog | Select-String -SimpleMatch -Pattern "Error when enabling ASP.NET v4.5 with IIS" -Encoding Unicode))
-                    {
-                        # Account for new issue with Win2012 RC / R2 and SP2013
-                        Write-Host -ForegroundColor White " - A known issue occurred configuring .NET 4 / IIS."
-                        $preReqKnownIssueRestart = $true
-                    }
-                    ElseIf ($preReqLog | Select-String -SimpleMatch -Pattern "pending restart blocks the installation" -Encoding Unicode)
-                    {
-                        Write-Host -ForegroundColor White " - A pending restart blocks the installation."
-                        $preReqKnownIssueRestart = $true
-                    }
-                    ElseIf ($preReqLog | Select-String -SimpleMatch -Pattern "Error: This tool supports Windows Server version 6.1 and version 6.2" -Encoding Unicode)
-                    {
-                        Write-Host -ForegroundColor White " - A known issue occurred (due to Win2012 R2), continuing."
-                        ##$preReqKnownIssueRestart = $true
-                    }
-                    Else
-                    {
-                        Invoke-Item -Path "$((Get-Item $env:TEMP).FullName)\$preReqLog"
-                        Throw " - Review the log file and try to correct any error conditions."
-                    }
-                }
-            }
-            # Look for restart requirement in log
-            $preReqRestartNeeded = ($preReqLog | Select-String -SimpleMatch -Pattern "0XBC2=3010" -Encoding Unicode) -or ($preReqLog | Select-String -SimpleMatch -Pattern "0X3E9=1001" -Encoding Unicode)
-            If ($preReqRestartNeeded -or $preReqKnownIssueRestart)
-            {
-                Write-Host -ForegroundColor White " - Setting AutoSPInstaller information in the registry..."
-                New-Item -Path "HKLM:\SOFTWARE\AutoSPInstaller\" -ErrorAction SilentlyContinue | Out-Null
-                $regKey = Get-Item -Path "HKLM:\SOFTWARE\AutoSPInstaller\"
-                $regKey | New-ItemProperty -Name "RestartRequired" -PropertyType String -Value "1" -Force | Out-Null
-                # We now also want to disable remote installs, or else each server will attempt to remote install to every *other* server after it reboots!
-                $regKey | New-ItemProperty -Name "CancelRemoteInstall" -PropertyType String -Value "1" -Force | Out-Null
-                $regKey | New-ItemProperty -Name "LogTime" -PropertyType String -Value $script:Logtime -ErrorAction SilentlyContinue | Out-Null
-                Throw " - One or more of the prerequisites requires a restart."
-            }
-            Write-Host -ForegroundColor White " - All Prerequisite Software installed successfully."
-        }
+        
+		If ($osName = "Windows Server 2016") 
+		{
+			 $featureInstalled = (Get-WindowsFeature NET-WCF-HTTP-Activation45,NET-WCF-TCP-Activation45,NET-WCF-Pipe-Activation45,Net-Framework-Features,Web-Server,Web-WebServer,Web-Common-Http,Web-Static-Content,Web-Default-Doc,Web-Dir-Browsing,Web-Http-Errors,Web-App-Dev,Web-Asp-Net,Web-Net-Ext,Web-ISAPI-Ext,Web-ISAPI-Filter,Web-Health,Web-Http-Logging,Web-Log-Libraries,Web-Request-Monitor,Web-Http-Tracing,Web-Security,Web-Basic-Auth,Web-Windows-Auth,Web-Filtering,Web-Digest-Auth,Web-Performance,Web-Stat-Compression,Web-Dyn-Compression,Web-Mgmt-Tools,Web-Mgmt-Console,Web-Mgmt-Compat,Web-Metabase,WAS,WAS-Process-Model,WAS-NET-Environment,WAS-Config-APIs,Web-Lgcy-Scripting,Windows-Identity-Foundation,Server-Media-Foundation,Xps-Viewer | Where-Object { $_.Installed -ne $true})
+			 if ($featureInstalled) 
+				{
+					Throw " - Not all windows feature are installed"
+				}
+			$InstalledSoftware = Get-WmiObject -Class Win32_Product
+			If (!($InstalledSoftware | Where-Object {$_.name -match "Microsoft SQL Server" -and $_.name -match " Native Client"}))
+			{
+				Throw " - Microsoft SQL Server Native Client not installed"
+			}
+			If (!($InstalledSoftware | Where-Object {$_.name -match "Microsoft Identity Extensions"}))
+			{
+				Throw " - Microsoft Identity Extensions not installed"
+			}
+			If (!($InstalledSoftware | Where-Object {$_.name -match "Microsoft Sync Framework"}))
+			{
+				Throw " - Microsoft Sync Framework not installed"
+			}			
+			If (!($InstalledSoftware | Where-Object {$_.name -match "Rights Management Services Client"}))
+			{
+				Throw " - Rights Management Services Client not installed"
+			}
+			If (!($InstalledSoftware | Where-Object {$_.name -match "AppFabric"}))
+			{
+				Throw " - AppFabric not installed"
+			}
+			If (($InstalledSoftware | Where-Object {$_.name -match "WCF Data Services" -and $_.name -notmatch "Language Pack"}).count -gt 2)
+			{
+				Throw " - WCF Data Services not installed"
+			}
+		}
+		Else
+		{
+			# Parsing most recent PreRequisiteInstaller log for errors or restart requirements, since $LASTEXITCODE doesn't seem to work...
+			$preReqLog = Get-ChildItem -Path (Get-Item $env:TEMP).FullName | ? {$_.Name -like "PrerequisiteInstaller.*"} | Sort-Object -Descending -Property "LastWriteTime" | Select-Object -first 1
+			If ($preReqLog -eq $null)
+			{
+				Write-Warning "Could not find PrerequisiteInstaller log file"
+			}
+			Else
+			{
+				# Get error(s) from log
+				$preReqLastError = $preReqLog | Select-String -SimpleMatch -Pattern "Error" -Encoding Unicode | ? {$_.Line  -notlike "*Startup task*"}
+				If ($preReqLastError)
+				{
+					ForEach ($preReqError in ($preReqLastError | ForEach {$_.Line})) {Write-Warning $preReqError}
+					$preReqLastReturncode = $preReqLog | Select-String -SimpleMatch -Pattern "Last return code" -Encoding Unicode | Select-Object -Last 1
+					If ($preReqLastReturnCode) {Write-Verbose $preReqLastReturncode.Line}
+					If (!($preReqLastReturncode -like "*(0)"))
+					{
+						Write-Warning $preReqLastReturncode.Line
+						If (($preReqLastReturncode -like "*-2145124329*") -or ($preReqLastReturncode -like "*2359302*") -or ($preReqLastReturncode -eq "5"))
+						{
+							Write-Host -ForegroundColor White " - A known issue occurred installing one of the prerequisites - retrying..."
+							InstallPreRequisites ([xml]$xmlinput)
+						}
+						ElseIf (($preReqLog | Select-String -SimpleMatch -Pattern "Error when enabling ASP.NET v4.0.30319" -Encoding Unicode) -or ($preReqLog | Select-String -SimpleMatch -Pattern "Error when enabling ASP.NET v4.5 with IIS" -Encoding Unicode))
+						{
+							# Account for new issue with Win2012 RC / R2 and SP2013
+							Write-Host -ForegroundColor White " - A known issue occurred configuring .NET 4 / IIS."
+							$preReqKnownIssueRestart = $true
+						}
+						ElseIf ($preReqLog | Select-String -SimpleMatch -Pattern "pending restart blocks the installation" -Encoding Unicode)
+						{
+							Write-Host -ForegroundColor White " - A pending restart blocks the installation."
+							$preReqKnownIssueRestart = $true
+						}
+						ElseIf ($preReqLog | Select-String -SimpleMatch -Pattern "Error: This tool supports Windows Server version 6.1 and version 6.2" -Encoding Unicode)
+						{
+							Write-Host -ForegroundColor White " - A known issue occurred (due to Win2012 R2), continuing."
+							##$preReqKnownIssueRestart = $true
+						}
+						Else
+						{
+							Invoke-Item -Path "$((Get-Item $env:TEMP).FullName)\$preReqLog"
+							Throw " - Review the log file and try to correct any error conditions."
+						}
+					}
+				}
+				# Look for restart requirement in log
+				$preReqRestartNeeded = ($preReqLog | Select-String -SimpleMatch -Pattern "0XBC2=3010" -Encoding Unicode) -or ($preReqLog | Select-String -SimpleMatch -Pattern "0X3E9=1001" -Encoding Unicode)
+				If ($preReqRestartNeeded -or $preReqKnownIssueRestart)
+				{
+					Write-Host -ForegroundColor White " - Setting AutoSPInstaller information in the registry..."
+					New-Item -Path "HKLM:\SOFTWARE\AutoSPInstaller\" -ErrorAction SilentlyContinue | Out-Null
+					$regKey = Get-Item -Path "HKLM:\SOFTWARE\AutoSPInstaller\"
+					$regKey | New-ItemProperty -Name "RestartRequired" -PropertyType String -Value "1" -Force | Out-Null
+					# We now also want to disable remote installs, or else each server will attempt to remote install to every *other* server after it reboots!
+					$regKey | New-ItemProperty -Name "CancelRemoteInstall" -PropertyType String -Value "1" -Force | Out-Null
+					$regKey | New-ItemProperty -Name "LogTime" -PropertyType String -Value $script:Logtime -ErrorAction SilentlyContinue | Out-Null
+					Throw " - One or more of the prerequisites requires a restart."
+				}
+				Write-Host -ForegroundColor White " - All Prerequisite Software installed successfully."
+			}
+		}
     }
     WriteLine
 }
@@ -2674,6 +2777,77 @@ Function AssignCert($SSLHostHeader, $SSLPort, $SSLSiteName)
 }
 #endregion
 
+
+#region MountDatabases
+# ===================================================================================
+# FUNC: MountDatabases
+# DESC: Mount Existing Databases 
+# TODO: Make this more robust, prompt for blank values etc.
+# ===================================================================================
+#Need to be in <WebApplication> tag
+# Current XML Layout
+#<ExistingContentDatabases>
+#				<UpgradetoCliaims>true</UpgradetoCliaims>
+#				<UpgradeSiteCollections>true</UpgradeSiteCollections>
+#				<ContentDatabase>
+#					<DBName>WSS_Content_Root</DBName>
+#					<DBState>Disabled</DBState>
+#				</ContentDatabase>
+#</ExistingContentDatabases>
+# ===================================================================================
+Function MountDatabases([System.Xml.XmlElement]$webApp) 
+{
+	If ($webApp.ExistingContentDatabases)
+	{
+		Write-Host -ForegroundColor White "--------------------------------------------------------------"
+		Write-Host -ForegroundColor White " - Start Mounting Databases in $($webApp.name)"
+		ForEach ($ContentDatabase in $webApp.ExistingContentDatabases.ContentDatabase)
+		{
+			If (!(Get-SPContentDatabase -Identity $ContentDatabase.DBName -ErrorAction SilentlyContinue))
+			{
+				#Test mounting Content Database
+				Test-SPContentDatabase -Name $ContentDatabase.DBName -WebApplication $webApp.name
+				#Mount Content Database
+				Mount-SPContentDatabase -Name $ContentDatabase.DBName -WebApplication $webApp.name
+				Write-Host -ForegroundColor Green "   - Done Mounting Databases: $($ContentDatabase.DBName)"
+				If ($ContentDatabase.DBState -eq "Disabled") 
+				{
+					Set-SPContentDatabase -Identity $ContentDatabase.DBName -Status $ContentDatabase.DBState
+				}
+			}
+		}
+		Write-Host -ForegroundColor White " - Done Mounting Databases in $($webApp.name)"
+		
+		If ((Get-Website -Name "SharePoint Web Services").state -ne "Started"){Start-Website -Name "SharePoint Web Services"} #Start SharePoint Web Services if stopped
+		#Upgrade Legacy Authentication to Claims 
+		If ($webApp.ExistingContentDatabases.UpgradetoCliaims -eq "true")
+		{
+			# Check for Legacy Authentication
+			If ((Get-SPWebApplication $webApp.name).UseClaimsAuthentication -ne "true" )
+			{
+				Write-Host -ForegroundColor White " - Start Converting to Claims Authentication for $($webApp.name)"
+				Convert-SPWebApplication -Identity ($webApp.name) -From Legacy -To Claims -RetainPermissions  -Force
+				Write-Host -ForegroundColor White " - Done Converting to Claims Authentication for $($webApp.name)"
+			}
+		}
+		#Upgrade Site Collections
+		If ($webApp.ExistingContentDatabases.UpgradeSiteCollections -eq "true")
+		{
+			
+			#Test to see if their are site to upgrade
+			If ((Get-SPWebApplication $webApp.name).sites | Where-Object {$_.CompatibilityLevel -lt ($env:spVer)})
+			{
+				Write-Host -ForegroundColor White " - Start upgrading site collections for $($webApp.name)"
+				(Get-SPWebApplication $webApp.name).sites| Where-Object {$_.CompatibilityLevel -lt ($env:spVer)} | Upgrade-SPSite -VersionUpgrade
+				Write-Host -ForegroundColor White " - Done upgrading site collections for $($webApp.name)"
+			}
+		}
+		If ((Get-Website -Name "SharePoint Web Services").state -ne "Started"){Start-Website -Name "SharePoint Web Services"} #Start SharePoint Web Services if stopped
+		Write-Host -ForegroundColor White "--------------------------------------------------------------"
+	}
+}
+#endregion
+
 #region Create Web Applications
 # ===================================================================================
 # Func: CreateWebApplications
@@ -2837,6 +3011,11 @@ Function CreateWebApp([System.Xml.XmlElement]$webApp)
         if ($wa.UseClaimsAuthentication -eq $true) {$currentUser = 'i:0#.w|' + $currentUser}
         Set-WebAppUserPolicy $wa $currentUser "$env:USERNAME" "Full Control"
     }
+    
+    ## Adding Logic for mounting existing ContentDatabases.
+	WriteLine
+	MountDatabases $webApp
+    
     WriteLine
     ConfigureObjectCache $webApp
 
@@ -6938,6 +7117,14 @@ Function Add-SQLAlias()
         }
     else {
         $protocol = "DBMSSOCN" # TCP/IP
+        $DBMSSOCN = Get-Item 'HKLM:\SOFTWARE\Microsoft\MSSQLServer\Client\SuperSocketNetLib'  -ErrorAction SilentlyContinue
+		If (!$DBMSSOCN) {$DBMSSOCN = New-Item 'HKLM:\SOFTWARE\Microsoft\MSSQLServer\Client\SuperSocketNetLib' -Force}
+		If ($DBMSSOCN.Property -eq $null) 
+		{
+			New-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\MSSQLServer\Client\SuperSocketNetLib' -Name "ProtocolOrder" -Value "tcp" -PropertyType MultiString
+			New-Item 'HKLM:\SOFTWARE\Microsoft\MSSQLServer\Client\SuperSocketNetLib\tcp' -Force
+			New-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\MSSQLServer\Client\SuperSocketNetLib\tcp' -Name "DefaultPort" -Value 1433 -PropertyType DWord
+		}
     }
 
     $serverAliasConnection="$protocol,$SQLInstance"
@@ -7362,11 +7549,14 @@ Function CheckIfUpgradeNeeded
         Return $false
     }
 }
-
+# ====================================================================================
+# Func: Get-SharePointInstall
+# Desc: Returns $true if the SharePoint or SharePoint Foundation is installed
+# ====================================================================================
 Function Get-SharePointInstall
 {
     # New(er), faster way courtesy of SPRambler (https://www.codeplex.com/site/users/view/SpRambler)
-    if ((Get-ItemProperty HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*) | Where-Object {$_.DisplayName -like "Microsoft SharePoint Server*"})
+    if ((Get-ItemProperty HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*) | Where-Object {$_.DisplayName -like "Microsoft SharePoint Server*" -or $_.DisplayName -like "Microsoft SharePoint Foundation*"})
     {
         return $true
     }
