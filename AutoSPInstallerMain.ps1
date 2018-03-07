@@ -271,7 +271,7 @@ Function Setup-Services
     if (((Get-WmiObject Win32_OperatingSystem).Version -like "6.2*" -or (Get-WmiObject Win32_OperatingSystem).Version -like "6.3*") -and ($env:spVer -eq "14"))
     {
         Write-Host -ForegroundColor White " - Installing SMTP Windows feature in a separate PowerShell window..."
-        Start-Process -FilePath "$PSHOME\powershell.exe" -Verb Runas -ArgumentList "-Command `". $env:dp0\AutoSPInstallerFunctions.ps1`"; InstallSMTP (Get-Content $inputFile); Start-Sleep 5`"" -Wait
+        Start-Process -FilePath "$PSHOME\powershell.exe" -Verb Runas -ArgumentList '-Command ". $env:dp0\AutoSPInstallerFunctions.ps1"; InstallSMTP (Get-Content $inputFile); Start-Sleep 5"' -Wait
     }
     else {InstallSMTP $xmlinput}
     ConfigureOutgoingEmail $xmlinput
