@@ -1996,9 +1996,15 @@ Function CreateCentralAdmin([xml]$xmlinput)
                     $SSLSiteName = $centralAdmin.DisplayName
                     if ($env:spVer -le "15") # Use the old pre-2016 way to enable SSL for Central Admin
                     {
-                        New-SPAlternateURL -Url "https://$($env:COMPUTERNAME):$centralAdminPort" -Zone Default -WebApplication $centralAdmin | Out-Null
+			#Allows for Alternative URLS for CentralAdmin site
+			if($xmlinput.Configuration.Farm.CentralAdmin.SPAlternateURLs)
+			{
+				Set-SPAlternateURLs $xmlinput.Configuration.Farm.CentralAdmin $centralAdmin
+			}else{
+				New-SPAlternateURL -Url "https://$($env:COMPUTERNAME):$centralAdminPort" -Zone Default -WebApplication $centralAdmin | Out-Null
+			}
                     }
-                    if (((Get-WmiObject Win32_OperatingSystem).Version -like "6.2*" -or (Get-WmiObject Win32_OperatingSystem).Version -like "6.3*") -and ($env:spVer -eq "14"))
+                    if (((Get-WmiObject Win32_OperatingSystem).Version -like "6.2*" -or (Get-WmiObject Win32_OperatingSystem).Version -like "6.3*" -or (Get-WmiObject Win32_OperatingSystem).Version -like "10.0.*") -and ($env:spVer -eq "14"))
                     {
                         Write-Host -ForegroundColor White " - Assigning certificate(s) in a separate PowerShell window..."
                         Start-Process -FilePath "$PSHOME\powershell.exe" -Verb RunAs -ArgumentList "-Command `". $env:dp0\AutoSPInstallerFunctions.ps1`; AssignCert $SSLHostHeader $SSLPort $SSLSiteName; Start-Sleep 10`"" -Wait
@@ -3139,6 +3145,45 @@ Function CreateWebApp([System.Xml.XmlElement]$webApp)
         Write-Host -ForegroundColor Yellow " - No site collections specified for $($webapp.url) - skipping."
     }
 }
+
+#region Setup Alternate SP URLs
+# ===================================================================================
+# Func: CreateCentralAdmin
+# Desc: Setup Central Admin Web Site, Check the topology of an existing farm, and configure the farm as required.
+# ===================================================================================
+Function Set-SPAlternateURLs([System.Xml.XmlElement]$xmlinputWeb,$WebApp)
+{
+	If ($xmlinputWeb.SPAlternateURLs -and $WebApp)
+	{
+		ForEach ($SPAlt in $xmlinputWeb.SPAlternateURLs)
+		{
+			If ($SPAlt)
+			{
+				If (!(get-SPAlternateURL | where {$_.Zone -eq $SPAlt.Zone -and $_.PublicUrl -eq $SPAlt.URL}))
+				{
+					#Set Zone URL
+					New-SPAlternateURL -Url $SPAlt.URL -Zone $SPAlt.Zone -WebApplication $WebApp | Out-Null
+					 If (-not $?) {Throw " - Error creating central administration application"}
+					 else {Write-Host -ForegroundColor White "`t - Setting up $SPAlt.Zone with $SPAlt.URL in $WebApp.DisplayName..."}
+				}
+				If ($SPAlt.InternalURL)
+				{
+					 ForEach ($SPAltInternal in $SPAlt.InternalURL)
+					 {
+						If (!(get-SPAlternateURL | where {$_.Zone -eq $SPAlt.Zone -and $_.IncomingUrl -eq $SPAltInternal}))
+						{
+							#Set Internal Zone URLs
+							New-SPAlternateURL -Url $SPAltInternal -Zone $SPAlt.Zone -WebApplication $WebApp –Internal | Out-Null
+							If (-not $?) {Throw " - Error creating central administration application"}
+							else {Write-Host -ForegroundColor White "`t - Setting up $SPAlt.Zone with $SPAltInternal in $WebApp.DisplayName..."}
+						}
+					 }
+				}
+			}
+		}
+	}
+}
+#endregion Setup Alternate SP URLs
 
 # ===================================================================================
 # Func: Set-WebAppUserPolicy
